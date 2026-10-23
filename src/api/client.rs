@@ -1,10 +1,13 @@
 use std::time::Duration;
 
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 
 use crate::error::PplxError;
 
 const DEFAULT_BASE_URL: &str = "https://api.perplexity.ai";
+const PERPLEXITY_API_HOST: &str = "api.perplexity.ai";
+const INTEGRATION_HEADER: &str = "x-pplx-integration";
+const INTEGRATION_SLUG: &str = "perplexity-cli";
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
 const MAX_RETRIES: u32 = 3;
 const RETRY_BASE_MS: u64 = 500;
@@ -33,6 +36,12 @@ impl ApiClient {
             HeaderValue::from_str(&format!("Bearer {api_key}"))
                 .map_err(|e| PplxError::Auth(format!("Invalid API key format: {e}")))?,
         );
+        if is_perplexity_api(base_url) {
+            headers.insert(
+                HeaderName::from_static(INTEGRATION_HEADER),
+                HeaderValue::from_static(INTEGRATION_SLUG),
+            );
+        }
 
         let client = reqwest::Client::builder()
             .default_headers(headers)
@@ -48,6 +57,13 @@ impl ApiClient {
     pub fn endpoint(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
     }
+}
+
+/// Only attribute requests sent to the public Perplexity API host.
+fn is_perplexity_api(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url)
+        .map(|url| url.scheme() == "https" && url.host_str() == Some(PERPLEXITY_API_HOST))
+        .unwrap_or(false)
 }
 
 /// Execute a closure with exponential backoff retry on retryable errors.
@@ -82,4 +98,21 @@ where
         }
     }
     Err(last_err.unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attributes_only_the_public_perplexity_api() {
+        assert!(is_perplexity_api(DEFAULT_BASE_URL));
+        assert!(is_perplexity_api("https://api.perplexity.ai/"));
+        assert!(is_perplexity_api("https://API.Perplexity.ai"));
+        assert!(!is_perplexity_api("http://api.perplexity.ai"));
+        assert!(!is_perplexity_api("https://api.perplexity.ai.example.com"));
+        assert!(!is_perplexity_api("https://example.com/api.perplexity.ai"));
+        assert!(!is_perplexity_api("http://127.0.0.1:8080"));
+        assert!(!is_perplexity_api("not a url"));
+    }
 }
